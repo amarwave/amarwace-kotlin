@@ -228,10 +228,11 @@ class AmarWave(private val config: AmarWaveConfig) : EventEmitter() {
                 retries.set(0)
                 setState(ConnectionState.CONNECTED)
                 log.info("[AmarWave] Connected — socket_id=$socketId")
-                channels.values.forEach { ch ->
-                    ch.subscribed = false
-                    doSubscribe(ch)
-                }
+                // Reset flags on the WS thread, then dispatch doSubscribe (which may
+                // make a blocking HTTP call for server-side auth) to the scheduler so
+                // we never block OkHttp's internal WebSocket listener thread.
+                val pending = channels.values.map { it.also { ch -> ch.subscribed = false } }
+                scheduler.submit { pending.forEach { doSubscribe(it) } }
             }
 
             "amarwave:error" -> {
@@ -252,7 +253,8 @@ class AmarWave(private val config: AmarWaveConfig) : EventEmitter() {
                 channels[channel]?.let { ch ->
                     ch.subscribed = true
                     ch.fireEvent("subscribed", data)
-                    ch.flushQueue()
+                    // flushQueue makes blocking HTTP publish calls — dispatch off WS thread
+                    scheduler.submit { ch.flushQueue() }
                     log.info("[AmarWave] Subscribed → $channel")
                 }
             }
@@ -354,11 +356,13 @@ class AmarWave(private val config: AmarWaveConfig) : EventEmitter() {
 
         config.authHeaders.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
 
-        val resp = http.newCall(reqBuilder.build()).execute()
-        if (!resp.isSuccessful) {
-            throw Exception("Auth endpoint returned ${resp.code} for channel '${ch.name}'")
+        val respBody = http.newCall(reqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                throw Exception("Auth endpoint returned ${resp.code} for channel '${ch.name}'")
+            }
+            resp.body?.string() ?: throw Exception("Empty auth response for '${ch.name}'")
         }
-        val respJson = JSONObject(resp.body?.string() ?: throw Exception("Empty auth response"))
+        val respJson = JSONObject(respBody)
         respJson.keys().forEach { key -> data[key] = respJson.get(key) }
     }
 

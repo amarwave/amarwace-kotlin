@@ -27,7 +27,7 @@ internal val CLUSTERS: Map<String, ClusterConfig> = mapOf(
         api = "https://amarwave.com",
     ),
     "local" to ClusterConfig(
-        wss = "ws://localhost:3001",
+        wss = "wss://localhost:3001",
         ws  = "ws://localhost:3001",
         api = "http://localhost:8000",
     ),

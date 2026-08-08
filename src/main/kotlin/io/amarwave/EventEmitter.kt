@@ -1,11 +1,12 @@
 package io.amarwave
 
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /** Thread-safe event emitter base. */
 open class EventEmitter {
 
-    private val listeners = HashMap<String, CopyOnWriteArrayList<EventHandler>>()
+    private val listeners = ConcurrentHashMap<String, CopyOnWriteArrayList<EventHandler>>()
     private val globalListeners = CopyOnWriteArrayList<(event: String, data: Any?) -> Unit>()
 
     /**

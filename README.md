@@ -32,14 +32,14 @@ dependencyResolutionManagement {
 **build.gradle.kts**
 ```kotlin
 dependencies {
-    implementation("com.github.amarwave:amarwace-kotlin:1.0.0")
+    implementation("com.github.amarwave:amarwace-kotlin:1.0.1")
 }
 ```
 
 **build.gradle (Groovy)**
 ```groovy
 dependencies {
-    implementation 'com.github.amarwave:amarwace-kotlin:1.0.0'
+    implementation 'com.github.amarwave:amarwace-kotlin:1.0.1'
 }
 ```
 

@@ -22,7 +22,7 @@ class Channel internal constructor(
 ) : EventEmitter() {
 
     /** True once the server confirms subscription. */
-    var subscribed: Boolean = false
+    @Volatile var subscribed: Boolean = false
         internal set
 
     private data class QueuedPublish(val event: String, val data: Any?)
