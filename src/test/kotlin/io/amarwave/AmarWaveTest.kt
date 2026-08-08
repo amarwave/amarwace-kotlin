@@ -186,6 +186,102 @@ class AmarWaveTest {
         aw.shutdown()
     }
 
+    // ── Server-side auth (authEndpoint) ───────────────────────────────────────
+
+    @Test
+    fun `serverAuth sends socket_id and channel_name to authEndpoint`() {
+        // Intercept /broadcasting/auth requests on the mock server
+        var authBody = ""
+        mockServer.createContext("/broadcasting/auth") { ex ->
+            authBody = ex.requestBody.bufferedReader().readText()
+            val resp = """{"auth":"test-key:fakesig"}"""
+            ex.sendResponseHeaders(200, resp.length.toLong())
+            ex.responseBody.use { it.write(resp.toByteArray()) }
+        }
+
+        val aw = AmarWave(AmarWaveConfig(
+            appKey       = "test-key",
+            // No appSecret — forces server-side auth path
+            authEndpoint = "http://localhost:${mockPort()}/broadcasting/auth",
+            apiHost      = "localhost",
+            apiPort      = mockPort(),
+        ))
+
+        // Manually trigger serverAuth by calling doSubscribe with a mock channel
+        // We expose it as internal so tests can call directly
+        val ch = Channel("private-orders", aw)
+        // Inject a fake socketId so serverAuth has something to send
+        val field = AmarWave::class.java.getDeclaredField("socketId")
+        field.isAccessible = true
+        field.set(aw, "abc.123")
+
+        aw.doSubscribe(ch)
+
+        assertTrue("auth body should contain socket_id",    authBody.contains("abc.123"))
+        assertTrue("auth body should contain channel_name", authBody.contains("private-orders"))
+        aw.shutdown()
+    }
+
+    @Test
+    fun `serverAuth merges returned auth into subscribe data`() {
+        // This verifies the auth response fields are used (not discarded)
+        mockServer.createContext("/broadcasting/auth2") { ex ->
+            ex.requestBody.bufferedReader().readText() // consume
+            val resp = """{"auth":"mykey:deadbeef","channel_data":"{\"user_id\":\"u1\"}"}"""
+            ex.sendResponseHeaders(200, resp.length.toLong())
+            ex.responseBody.use { it.write(resp.toByteArray()) }
+        }
+
+        val data = mutableMapOf<String, Any>("channel" to "presence-room")
+        val aw = AmarWave(AmarWaveConfig(
+            appKey       = "mykey",
+            authEndpoint = "http://localhost:${mockPort()}/broadcasting/auth2",
+            apiHost      = "localhost",
+            apiPort      = mockPort(),
+        ))
+
+        // Access private serverAuth via reflection for direct test
+        val method = AmarWave::class.java.getDeclaredMethod(
+            "serverAuth", Channel::class.java, MutableMap::class.java)
+        method.isAccessible = true
+        val ch = Channel("presence-room", aw)
+        method.invoke(aw, ch, data)
+
+        assertEquals("mykey:deadbeef", data["auth"])
+        assertTrue(data.containsKey("channel_data"))
+        aw.shutdown()
+    }
+
+    @Test
+    fun `serverAuth throws on non-2xx response`() {
+        mockServer.createContext("/broadcasting/auth-fail") { ex ->
+            ex.requestBody.bufferedReader().readText()
+            ex.sendResponseHeaders(401, 0)
+            ex.responseBody.close()
+        }
+
+        val aw = AmarWave(AmarWaveConfig(
+            appKey       = "k",
+            authEndpoint = "http://localhost:${mockPort()}/broadcasting/auth-fail",
+            apiHost      = "localhost",
+            apiPort      = mockPort(),
+        ))
+
+        val method = AmarWave::class.java.getDeclaredMethod(
+            "serverAuth", Channel::class.java, MutableMap::class.java)
+        method.isAccessible = true
+        val ch   = Channel("private-x", aw)
+        val data = mutableMapOf<String, Any>("channel" to "private-x")
+
+        try {
+            method.invoke(aw, ch, data)
+            fail("Expected exception for 401")
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            assertTrue(e.cause?.message?.contains("401") == true)
+        }
+        aw.shutdown()
+    }
+
     // ── Channel ───────────────────────────────────────────────────────────────
 
     @Test

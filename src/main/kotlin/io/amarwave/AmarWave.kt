@@ -296,11 +296,12 @@ class AmarWave(private val config: AmarWaveConfig) : EventEmitter() {
     // ── Subscribe ─────────────────────────────────────────────────────────────
 
     internal fun doSubscribe(ch: Channel) {
-        val name    = ch.name
-        val data    = mutableMapOf<String, Any>("channel" to name)
+        val name = ch.name
+        val data = mutableMapOf<String, Any>("channel" to name)
 
         try {
             when {
+                // ── Client-side HMAC (appSecret provided) ───────────────────
                 name.startsWith("presence-") && config.appSecret.isNotEmpty() -> {
                     val channelData = JSONObject()
                         .put("user_id",   uid())
@@ -311,8 +312,13 @@ class AmarWave(private val config: AmarWaveConfig) : EventEmitter() {
                     data["channel_data"] = channelData
                 }
                 name.startsWith("private-") && config.appSecret.isNotEmpty() -> {
+                    // Signed string: "<socket_id>:<channel_name>"
                     val sig = hmacSha256(config.appSecret, "${socketId}:${name}")
                     data["auth"] = "${config.appKey}:$sig"
+                }
+                // ── Server-side auth (no appSecret — call authEndpoint) ──────
+                name.startsWith("private-") || name.startsWith("presence-") -> {
+                    serverAuth(ch, data)
                 }
             }
         } catch (e: Exception) {
@@ -321,6 +327,39 @@ class AmarWave(private val config: AmarWaveConfig) : EventEmitter() {
         }
 
         rawSend(mapOf("event" to "amarwave:subscribe", "data" to data))
+    }
+
+    /**
+     * Call [AmarWaveConfig.authEndpoint] with `{socket_id, channel_name}` and
+     * merge the response fields (e.g. `auth`, `channel_data`) into [data].
+     *
+     * The server must return JSON like:
+     *   `{"auth":"<appKey>:<hmac_sha256_hex>"}`
+     *
+     * For presence channels it should also include:
+     *   `{"auth":"...","channel_data":"{\"user_id\":\"...\",\"user_info\":{}}"}`
+     *
+     * @throws Exception if the auth endpoint returns a non-2xx response.
+     */
+    private fun serverAuth(ch: Channel, data: MutableMap<String, Any>) {
+        val body = JSONObject()
+            .put("socket_id",    socketId)
+            .put("channel_name", ch.name)
+            .toString()
+
+        val reqBuilder = Request.Builder()
+            .url(config.authEndpoint)
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .addHeader("Content-Type", "application/json")
+
+        config.authHeaders.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
+
+        val resp = http.newCall(reqBuilder.build()).execute()
+        if (!resp.isSuccessful) {
+            throw Exception("Auth endpoint returned ${resp.code} for channel '${ch.name}'")
+        }
+        val respJson = JSONObject(resp.body?.string() ?: throw Exception("Empty auth response"))
+        respJson.keys().forEach { key -> data[key] = respJson.get(key) }
     }
 
     // ── Timers ────────────────────────────────────────────────────────────────
